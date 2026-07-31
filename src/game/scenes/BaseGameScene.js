@@ -10,6 +10,8 @@ import { log } from "../logger";
 import { yardsToPixels, getHomePlayers, getAwayPlayers, getAllPlayers, deselectAllPlayers } from "../helpers";
 import { FormationManager } from "../FormationManager";
 import { PlayStateManager } from "../PlayStateManager";
+import { PlayRecorder } from "../PlayRecorder";
+import { ReviewScrubber } from "../ReviewScrubber";
 import { saveGame, loadGame } from "../saveGame";
 
 export class BaseGameScene extends Scene {
@@ -58,6 +60,9 @@ export class BaseGameScene extends Scene {
 
         this.formationManager = null;
         this.playStateManager = null;
+        this.playRecorder = null;
+        this.reviewMode = false;
+        this.activeResultPopup = null;
     }
 
     // Re-runs on every scene.start()/scene.restart() call, unlike the constructor —
@@ -105,6 +110,7 @@ export class BaseGameScene extends Scene {
     create() {
         this.formationManager = new FormationManager(this);
         this.playStateManager = new PlayStateManager(this);
+        this.playRecorder = new PlayRecorder(this);
 
         this.createField();
         this.createPlayers();
@@ -387,7 +393,7 @@ export class BaseGameScene extends Scene {
         this.input.on(
             "dragstart",
             (pointer, gameObject) => {
-                if (!this.playStarted) {
+                if (!this.playStarted && !this.reviewMode) {
                     this.draggedPlayer = gameObject;
                     gameObject.setAlpha(0.7);
                     if (gameObject.body) {
@@ -418,7 +424,7 @@ export class BaseGameScene extends Scene {
             (pointer, gameObject) => {
                 log("Object clicked:", gameObject.entityType);
 
-                if (!this.playStarted && gameObject.entityType === "Player") {
+                if (!this.playStarted && !this.reviewMode && gameObject.entityType === "Player") {
                     log("Player selected:", gameObject.x, gameObject.y);
                     log("Id: ", gameObject.id);
                     log("off pos:", gameObject.offensivePosition);
@@ -449,6 +455,7 @@ export class BaseGameScene extends Scene {
                 }
 
                 if (!this.passAttempted &&
+                    !this.reviewMode &&
                     gameObject.body &&
                     this.playType === "Pass" &&
                     gameObject.offensivePosition !== "QB" &&
@@ -678,8 +685,22 @@ export class BaseGameScene extends Scene {
             .onClick(() => this.changeformation());
 
         // Menu button
-        new Button(this, this.canvasWidth - 100, 40, "Menu", { width: 100, height: 60, labelStyle: arrowStyle })
+        const menuButtonWidth = 100;
+        const menuButtonX = this.canvasWidth - 100;
+        new Button(this, menuButtonX, 40, "Menu", { width: menuButtonWidth, height: 60, labelStyle: arrowStyle })
             .onClick(() => this.returnToMenu());
+
+        // Review Play — toggles between reviewing the just-finished play and resuming
+        const reviewButtonWidth = buttonWidth + 55;
+        this.reviewButton = new Button(
+            this, menuButtonX - menuButtonWidth / 2 - reviewButtonWidth / 2 - 20, 40,
+            'Review Play', { width: reviewButtonWidth, height: 60, labelStyle: { fontSize: '24px', fill: '#fff' } }
+        );
+        this.reviewButton.onClick(() => {
+            if (this.reviewMode) this.exitReviewMode();
+            else this.enterReviewMode();
+        });
+        this.reviewButton.disable();
 
         // Play type controls
         new Button(this, 280, y + 25, "<", { width: 60, height: 60, labelStyle: arrowStyle })
@@ -756,6 +777,37 @@ export class BaseGameScene extends Scene {
         this.resetGameButton.onClick(() => this.restart());
 
         this.nextPlayButton.disable();
+
+        // Review scrubber sits top-middle of the field, clear of both the popups (mid-field)
+        // and the controls row below.
+        const reviewScrubberX = this.canvasWidth / 2;
+        const reviewScrubberY = this.fieldY + 40;
+        this.reviewScrubber = new ReviewScrubber(this, reviewScrubberX, reviewScrubberY);
+        this.reviewScrubber.onScrub = (frameIndex) => this.playRecorder.applyFrame(frameIndex);
+    }
+
+    enterReviewMode() {
+        if (!this.playRecorder.hasReplay()) return;
+        this.reviewMode = true;
+        // Hide only the popup that's actually up — hideUIPopups() would also clear
+        // activeResultPopup, leaving exitReviewMode() with nothing to restore.
+        if (this.activeResultPopup) this.activeResultPopup.hide();
+        this.reviewButton.setLabel('Resume');
+        this.reviewScrubber.show(this.playRecorder.frameCount);
+    }
+
+    exitReviewMode() {
+        this.resetReviewUI();
+        this.playRecorder.applyFrame(this.playRecorder.frameCount - 1);
+        if (this.activeResultPopup) this.activeResultPopup.show();
+    }
+
+    // Every path that moves the game on from the reviewed play routes through here, so
+    // review state can't survive into a play it no longer describes.
+    resetReviewUI() {
+        this.reviewMode = false;
+        this.reviewScrubber.hide();
+        this.reviewButton.setLabel('Review Play');
     }
 
     createModeUI() {
@@ -874,6 +926,8 @@ export class BaseGameScene extends Scene {
                 player.applyMovementForce(dt, baseForceMagnitude, teamSign, directionSign, this.vibrationStrength);
                 this.updateTargetCircle(player);
             }
+
+            this.playRecorder.captureFrame(allPlayers);
         }
 
         this.updateMode(time, delta);
@@ -905,22 +959,27 @@ export class BaseGameScene extends Scene {
         this.downPopup.hide();
         this.touchdownPopup.hide();
         this.turnoverPopup.hide();
+        this.activeResultPopup = null;
         deselectAllPlayers(this);
     }
 
     showIncompleteNextPlay() {
         this.incompletePopup.show();
+        this.activeResultPopup = this.incompletePopup;
     }
 
     showTouchdownUI() {
         this.touchdownPopup.show();
+        this.activeResultPopup = this.touchdownPopup;
     }
 
     showDownUI() {
         if (this.turnoverOnDowns) {
             this.turnoverPopup.show();
+            this.activeResultPopup = this.turnoverPopup;
         } else {
             this.downPopup.show();
+            this.activeResultPopup = this.downPopup;
         }
     }
 
@@ -984,6 +1043,11 @@ export class BaseGameScene extends Scene {
 
     startPlay() {
         this.playStateManager.startPlay();
+        // Defensive: no live path reaches a snap while reviewing today (every play-ending
+        // pause passes ballCarrierDown, so Start stays disabled). Kept because a stale
+        // reviewMode would silently block pass targeting for the whole play.
+        this.resetReviewUI();
+        this.reviewButton.disable();
     }
 
     pausePlay(ballCarrierDown) {
@@ -992,12 +1056,27 @@ export class BaseGameScene extends Scene {
 
     nextPlay() {
         this.playStateManager.nextPlay();
+        // nextPlay() has already reset every player to the new down's formation, so any
+        // in-progress review of the prior play is no longer safe to resume into (Resume
+        // would overwrite the fresh formation with the old play's recorded positions) —
+        // tear the review UI down rather than just hiding it.
+        this.resetReviewUI();
+        this.reviewButton.disable();
         saveGame(this);
     }
 
     handleTackle(ballCarrier, tackler, type) {
         this.playStateManager.handleTackle(ballCarrier, tackler, type);
         saveGame(this);
+    }
+
+    // Called from pausePlay() once a play has truly ended, not from handleTackle(). A
+    // touchdown keeps simulating for the celebration window after the endzone sensor fires,
+    // and that run belongs in the replay -- stopping at handleTackle() would cut it off at
+    // the goal line and light up Review Play while players were still moving.
+    endPlayRecording() {
+        this.playRecorder.stop();
+        if (this.playRecorder.hasReplay()) this.reviewButton.enable();
     }
 
     incrementDown() {

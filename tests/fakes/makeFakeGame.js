@@ -24,6 +24,7 @@ export function makeFakePlayer(overrides = {}) {
         makeDynamic: vi.fn(),
         stop: vi.fn(),
         resetPosition: vi.fn(),
+        applyRecordedFrame: vi.fn(),
         deselect: vi.fn(),
         logPlayer: vi.fn(),
         ...overrides,
@@ -91,6 +92,8 @@ export function makeFakeGame(overrides = {}) {
         hideUIPopups: vi.fn(),
         showTouchdownUI: vi.fn(),
         showDownUI: vi.fn(),
+        playRecorder: { start: vi.fn(), stop: vi.fn() },
+        endPlayRecording: vi.fn(),
 
         ...rest,
     };

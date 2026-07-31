@@ -44,6 +44,11 @@ export class Button {
         return this;
     }
 
+    setLabel(label) {
+        this.text.setText(label);
+        return this;
+    }
+
     setVisible(visible) {
         this.rect.setVisible(visible);
         this.text.setVisible(visible);

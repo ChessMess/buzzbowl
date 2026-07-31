@@ -204,6 +204,15 @@ export class Player extends Phaser.GameObjects.Graphics {
         }
     }
 
+    // setPosition/setRotation come from Matter's Transform component (every Player gets a
+    // body in the constructor), so these write straight through to the physics body.
+    applyRecordedFrame({ x, y, angle, hasBall }) {
+        this.setPosition(x, y);
+        this.setRotation(angle);
+        this.currentAngle = angle;
+        if (hasBall !== this.hasBall) this.setHasBall(hasBall);
+    }
+
     setTeamColor(color) {
         this.fillColor = color;
     }

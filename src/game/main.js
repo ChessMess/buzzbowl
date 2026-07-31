@@ -45,7 +45,11 @@ const config = {
 };
 
 const StartGame = (parent) => {
-    return new Game({ ...config, parent });
+    const game = new Game({ ...config, parent });
+    // Dev-only console handle. Phaser keeps no global registry and nothing consumes the
+    // ref PhaserGame.jsx sets, so without this there is no way to inspect a live scene.
+    if (import.meta.env.DEV) window.__game = game;
+    return game;
 }
 
 export default StartGame;

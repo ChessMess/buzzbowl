@@ -17,6 +17,7 @@ export class PlayStateManager {
         this.game.lineOfScrimmage.previousX = this.game.lineOfScrimmage.x;
         this.game.passAttempted = false;
         this.game.snapAt = this.game.time.now;
+        this.game.playRecorder.start();
 
         const snapBallCarrier = getAllPlayers(this.game).find(p => p.hasBall);
         console.log(
@@ -56,6 +57,13 @@ export class PlayStateManager {
             this.game.startButton.enable();
         }
         this.game.pauseButton.disable();
+
+        // ballCarrierDown distinguishes a play ending from a mid-play Pause, and this is the
+        // first point at which nothing is moving any more -- for a touchdown that is 120
+        // frames after the endzone sensor fired, so the run into the endzone gets recorded.
+        if (ballCarrierDown) {
+            this.game.endPlayRecording();
+        }
     }
 
     changePossession(keepLOS = false) {

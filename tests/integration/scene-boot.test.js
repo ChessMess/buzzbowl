@@ -182,6 +182,123 @@ describe('touchdown at the goal line', () => {
     });
 });
 
+describe('play review', () => {
+    // hasReplay() needs 2+ recorded frames, and only a live play records.
+    function recordAFewFrames() {
+        scene.startPlay();
+        scene.update(0, 16);
+        scene.update(16, 16);
+    }
+
+    // applyRecordedFrame leans on Matter's Transform component: setPosition/setRotation
+    // write through to the physics body, so it does not touch scene.matter itself. If that
+    // ever stops holding, players would visually replay while their bodies stayed put.
+    it('scrubbing moves the physics body, not just the sprite', () => {
+        recordAFewFrames();
+        const runner = getAllPlayers(scene).find((p) => p.hasBall);
+        const startX = runner.body.position.x;
+
+        runner.applyRecordedFrame({ x: startX + 200, y: 300, angle: 1, hasBall: true });
+
+        expect(runner.body.position.x).toBeCloseTo(startX + 200);
+        expect(runner.body.position.y).toBeCloseTo(300);
+        expect(runner.body.angle).toBeCloseTo(1);
+    });
+
+    // enterReviewMode used to call hideUIPopups(), which nulls activeResultPopup -- so
+    // exitReviewMode had nothing left to restore and Resume silently dropped the
+    // end-of-play popup, leaving the Next Play button as the only way forward.
+    it('restores the end-of-play popup when a review is resumed', () => {
+        scene.lineOfScrimmage.x = 600;
+        scene.firstDownMarker.x = 900;
+        recordAFewFrames();
+
+        const ballCarrier = getAllPlayers(scene).find((p) => p.hasBall);
+        ballCarrier.x = 650;
+        scene.handleTackle(ballCarrier, null, 'Tackle');
+        expect(scene.downPopup.bgRect.visible).toBe(true);
+
+        scene.enterReviewMode();
+        expect(scene.downPopup.bgRect.visible).toBe(false);
+
+        scene.exitReviewMode();
+        expect(scene.downPopup.bgRect.visible).toBe(true);
+    });
+
+    // The persistent Next Play button stays enabled underneath the review UI, so this is
+    // reachable with one click. nextPlay() has already reset everyone to the new down's
+    // formation, so a surviving review would let Resume stamp the old play's positions back
+    // over it.
+    it('tears down an open review when Next Play is clicked', () => {
+        scene.lineOfScrimmage.x = 600;
+        scene.firstDownMarker.x = 900;
+        recordAFewFrames();
+
+        const ballCarrier = getAllPlayers(scene).find((p) => p.hasBall);
+        ballCarrier.x = 650;
+        scene.handleTackle(ballCarrier, null, 'Tackle');
+
+        scene.enterReviewMode();
+        expect(scene.reviewMode).toBe(true);
+
+        scene.nextPlay();
+        expect(scene.reviewMode).toBe(false);
+        expect(scene.reviewScrubber.handle.visible).toBe(false);
+        expect(scene.reviewButton.rect.input.enabled).toBe(false);
+    });
+
+    // Defensive rather than a live path: every play-ending pause passes ballCarrierDown, so
+    // Start is disabled while reviewing. A stale reviewMode would silently block pass
+    // targeting for the whole play, which is not a failure you would trace back to here.
+    it('never carries review mode into a snapped play', () => {
+        recordAFewFrames();
+        const ballCarrier = getAllPlayers(scene).find((p) => p.hasBall);
+        scene.handleTackle(ballCarrier, null, 'Tackle');
+        scene.enterReviewMode();
+
+        scene.startPlay();
+
+        expect(scene.reviewMode).toBe(false);
+        expect(scene.reviewScrubber.handle.visible).toBe(false);
+    });
+
+    // Upstream #19 keeps the play simulating for framesAfterScore after the endzone sensor
+    // fires, so the ball carrier runs on into the endzone. Recording used to stop in
+    // handleTackle, which cut the replay off at the goal line and lit up Review Play while
+    // players were still moving.
+    it('records the run into the endzone, not just up to the goal line', () => {
+        scene.possession = 'Home';
+        scene.targetEndzone = 'Right';
+        recordAFewFrames();
+
+        const ballCarrier = getAllPlayers(scene).find((p) => p.hasBall);
+        ballCarrier.x = scene.rightGoalLineX + 1;
+        scene.update(32, 16);
+        expect(scene.scored).toBe(true);
+
+        // Still celebrating: play is live, so the recorder must still be running and the
+        // review button must not be offering a scrub of a moving field.
+        const framesAtScore = scene.playRecorder.frameCount;
+        expect(scene.playStarted).toBe(true);
+        expect(scene.reviewButton.rect.input.enabled).toBe(false);
+
+        // Drive the carrier deeper into the endzone through the celebration window.
+        // framesAfterScore counts down as we go, so snapshot the bound first.
+        const celebrationFrames = scene.framesAfterScore + 5;
+        for (let i = 0; i < celebrationFrames && scene.playStarted; i++) {
+            ballCarrier.x = scene.rightGoalLineX + 2 + i;
+            scene.update(48 + i * 16, 16);
+        }
+
+        expect(scene.playStarted).toBe(false);
+        expect(scene.playRecorder.frameCount).toBeGreaterThan(framesAtScore);
+        expect(scene.reviewButton.rect.input.enabled).toBe(true);
+
+        const finalFrame = scene.playRecorder.frames[scene.playRecorder.frameCount - 1];
+        expect(finalFrame[ballCarrier.id].x).toBeGreaterThan(scene.rightGoalLineX + 2);
+    });
+});
+
 describe('save on tackle', () => {
     beforeEach(() => {
         const store = new Map();
